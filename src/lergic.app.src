@@ -1,0 +1,7 @@
+{application, lergic, [
+  {description, "Logic programming DSL"},
+  {vsn, git},
+  {registered, []},
+  {applications, [kernel, stdlib, syntax_tools, parse_trans]},
+  {env, []}
+]}.
