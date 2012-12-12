@@ -1,27 +1,26 @@
 -module(lergic).
 %public API
--export([bind/2]).
 %faux api visible in the parse transform:
 -export([all/1, maybe/1, one/1, fn/1]).
 -define(LERGIC_QUERIES,[all,maybe,one]).
-%transformed from LC:
+%for defining relations, hopefully hidden away eventually:
+-export([bind/2]).
+%transformed, actual API:
 -export([all/2, maybe/2, one/2]).
 %parse transform
 -export([parse_transform/2]).
 -export([do_transform/4, do_freshen/4, do_replace_variables/4]).
 -compile({parse_transform,parse_trans_codegen}).
 
+% example:
 % lergic:all(
 % 	fight_char(FID,CID), %bind $1,$2 for FID,CID
 % 	char_ct(CID,CT), %replace CID with $2, bind $3 for CT
 % 	char_speed(CID,Spd), %replace CID with $2, bind $4 for Spd
 % 	char(CID,C), %replace CID with $2, bind $5 for C
-%   PA = BPA + 3 % plus(BPA,3,PA), -->
-%			% replace BPA with $N, bind $N+1 for PA
-%   PA = -PB % {PBV,PAV} <- '-'(PB,PA)
 % 	C#char{ct=lergic:fn(min(100,CT+Spd))}
-%			% term, just let it slip by (but replace CT and Spd with $3,$4!)
-%     % note too lergic:fn() to let a non-relational call go through!
+% 	  % term, just let it slip by (but replace CT and Spd with $3,$4)
+% 	  % note too lergic:fn() to let a non-relational call go through
 % ) % ---->
 %[CV#char{ct=min(100,CTV+SpdV)} ||
 % {FIDV,CIDV} <- rel_fight_char(FID,CID),
@@ -70,7 +69,7 @@ fn(R) -> untransformed(fn,R).
 
 untransformed(F,R) ->
 	throw({lergic,untransformed,F,
-		"Please use the lergic parse transform when compiling this module.",
+		"Please use the lergic parse transform when compiling this query",
 		{argument,R}}).
 
 %parse transform
@@ -122,7 +121,8 @@ deep_copy_pos(T,Dest) ->
 		end,
 		undefined,
 		[Dest],
-		[]),
+		[]
+	),
 	Ret.
 
 transform_lergic_call(T,Used) ->
@@ -210,7 +210,7 @@ query_parts_from_call(Term,Rest,Acc,Set) ->
 			Op = erl_syntax:application_operator(Term),
 			Args0 = erl_syntax:application_arguments(Term),
 			{NewArgs,Template,Rest2,Set2} =
-				 freshen_variables(Args0,Rest,Set),
+				freshen_variables(Args0,Rest,Set),
 			BoundPattern = case Template of
 				[Unit] -> Unit;
 				Template -> erl_syntax:tuple(Template)
@@ -300,7 +300,7 @@ do_freshen(variable,V,_Ctx,{LHS,Rest,Set}) ->
 	VN = erl_syntax:variable_name(V),
 	%EVEN IF the variable is bound in set, we still need a fresh variable on the LHS
 	%        because generators require their LHS to have no free vars.
-			% otherwise, make a fresh variable and:
+	% otherwise, make a fresh variable and:
 	{NVN,Set2} = unused_variable_name(AllVars),
 	%   in either case, deep-replace all future occurrences of the variable in Rest and LHS with the fresh variable
 	LHS2 = replace_variables(LHS,VN,NVN),
@@ -338,10 +338,10 @@ do_replace_variables(_,T,_Ctx,S) ->
 replace_first_underscore(Trees,NewName) when is_list(Trees) ->
 	{Terms,_FoundAny} = parse_trans:transform(
 		fun(underscore,T,_Ctx,false) ->
-				T2 = dup(T, erl_syntax:variable(NewName)),
-				{T2,false,true};
-			 (_,T,_,Done) ->
-				{T,true,Done}
+			T2 = dup(T, erl_syntax:variable(NewName)),
+			{T2,false,true};
+		   (_,T,_,Done) ->
+			{T,true,Done}
 		end,
 		false,
 		Trees,

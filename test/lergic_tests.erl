@@ -55,7 +55,7 @@ fn_test() ->
 
 rel_cool_number(V) ->
 	[VV || N <- [2,3,4],
-				 VV <- lergic:bind(V,N)].
+	       VV <- lergic:bind(V,N)].
 
 odd(V) -> (V rem 2) == 1.
 double(V) -> V*2.
