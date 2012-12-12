@@ -2,7 +2,7 @@
 
 An embedded DSL for logic programming in Erlang, intended to replace deep lookups and updates to state objects with lots of lists of data. Nicer syntax than QLC for doing joins, and you can easily use arbitrary functions and relations in your query. See `test/lergic_tests.erl`.
 
-Lergic also be seen as a reincarnation of mnemosyne; I intend to steal rule syntax for relation definition as my next step.
+Lergic can also be seen as a reincarnation of mnemosyne; I intend to steal rule syntax for relation definition as my next step.
 
 Relations can be backed by any kind of store--I like to pass along the `'_'` sigil into match-specs--and they work via a parse transform that turns queries into list comprehensions. If you're worried about nested loops, you can be careful to write for more queries and fewer searches, or you can update the parse transform to spit out QLC query handles rather than list comprehensions and send me a pull request.
 
