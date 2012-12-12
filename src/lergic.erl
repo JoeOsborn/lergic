@@ -6,7 +6,7 @@
 %for defining relations, hopefully hidden away eventually:
 -export([bind/2]).
 %transformed, actual API:
--export([all/2, maybe/2, one/2]).
+-export([all_/2, maybe_/2, one_/2]).
 %parse transform
 -export([parse_transform/2]).
 -export([do_transform/4, do_freshen/4, do_replace_variables/4]).
@@ -31,11 +31,11 @@
 
 %public API
 
-all(_LC,Results) -> Results.
-maybe(_LC,[]) -> false;
-maybe(_LC,Results) -> Results.
-one(_LC,[Result]) -> Result;
-one(LC,Results) -> throw({lergic, expected_one, LC, Results}).
+all_(_LC,Results) -> Results.
+maybe_(_LC,[]) -> false;
+maybe_(_LC,Results) -> Results.
+one_(_LC,[Result]) -> Result;
+one_(LC,Results) -> throw({lergic, expected_one, LC, Results}).
 
 bind('_',V) -> [V];
 bind({any,AVs},V) ->
@@ -87,15 +87,32 @@ parse_transform(Forms, Options) ->
 	parse_trans:pp_src(parse_trans:revert(Forms1), "out.txt"),
 	parse_trans:revert(Forms1).
 
-do_transform(application, T, _Ctx, S) ->
-	{Mod,Fn} = mod_fn(T),
-	case {Mod,Fn,lists:member(Fn,?LERGIC_QUERIES)} of
-		{lergic,Fn,true} ->
+maybe_atom(undefined) -> undefined;
+maybe_atom(T) ->
+	case erl_syntax:type(T) of
+		atom -> erl_syntax:atom_value(T);
+		_ -> T
+	end.
+
+do_transform(application, T, Ctx, S) ->
+	% io:format("maybe transform ~p~n",[T]),
+	{M,F} = mod_fn(T),
+	% io:format("MFN:~p~n",[{M,F}]),
+	try
+	case {
+		maybe_atom(M),
+		maybe_atom(F),
+		lists:member(maybe_atom(F),?LERGIC_QUERIES)
+	} of
+		{lergic,_Fn,true} ->
+			% io:format("transforming call~n"),
 			{T2,S2} = transform_lergic_call(T,S),
+			% io:format("transformed call~n"),
 			{T2,false,S2};
-		{Mod,Fn,false} ->
+		{_Mod,_Fn,false} ->
 			{T,true,S}
-	end;
+	end
+	catch _:Err -> io:format("top level error ~p~n",[{Ctx,Err}]), throw(Err) end;
 do_transform(_,T,_,S) ->
 	{T,true,S}.
 
@@ -104,11 +121,14 @@ fn_to_call(Term) ->
 
 call_to_rel(Term) ->
 	{Mod,Fn} = mod_fn(Term),
-	RN = list_to_atom("rel_"++atom_to_list(Fn)),
+	RN = list_to_atom("rel_"++atom_to_list(maybe_atom(Fn))),
 	dup(Term, erl_syntax:application(
 		case Mod of
 			undefined -> dup(Term,erl_syntax:atom(RN));
-			Mod -> dup(Term,erl_syntax:module_qualifier(Mod,RN))
+			Mod -> dup(Term,erl_syntax:module_qualifier(
+				Mod,
+				erl_syntax:atom(RN)
+			))
 		end,
 		erl_syntax:application_arguments(Term)
 	)).
@@ -125,6 +145,14 @@ deep_copy_pos(T,Dest) ->
 	),
 	Ret.
 
+lergic_public_to_private(Op) ->
+	PublicName = erl_syntax:atom_value(erl_syntax:module_qualifier_argument(Op)),
+	PrivateName = list_to_atom(atom_to_list(PublicName)++"_"),
+	dup(Op,erl_syntax:module_qualifier(
+		erl_syntax:atom(lergic),
+		erl_syntax:atom(PrivateName)
+	)).
+
 transform_lergic_call(T,Used) ->
 	Args0 = erl_syntax:application_arguments(T),
 	{Body,Template,Used2} = case query_parts(Args0,[],undefined,Used) of
@@ -137,27 +165,30 @@ transform_lergic_call(T,Used) ->
 	[Comp] = parse_trans:revert([erl_syntax:list_comp(Template,Body)]),
 	CompStr =	lists:flatten(erl_pp:expr(hd(parse_trans:revert([T])))),
 	Ret0 = erl_syntax:application(
-		erl_syntax:application_operator(T),
+		lergic_public_to_private(erl_syntax:application_operator(T)),
 		[
 			erl_syntax:string(CompStr),
 			Comp
 		]
 	),
 	Ret1 = deep_copy_pos(T,Ret0),
+	try
 	{[Ret2],_} = parse_trans:transform(fun do_munge_functions/4,
 		undefined,
 		[Ret1],
 		[]
 	),
-	{Ret2,Used2}.
+	{Ret2,Used2}
+	catch _:Err -> io:format("munge failed with ~p~n",[Err]),throw(Err) end.
 
 do_munge_functions(application,T,_Ctx,S) ->
-	case mod_fn(T) of
+	{M,F} = mod_fn(T),
+	case {maybe_atom(M),maybe_atom(F)} of
 		{lergic,fn} ->
 			{fn_to_call(T),false,S};
 		{lergic,_Fn} ->
 			{T,true,S};
-		{_Mod,_Fn} ->
+		{_Mod,Fn} when is_atom(Fn) ->
 			{call_to_rel(T),true,S}
 	end;
 do_munge_functions(_Type,T,_Ctx,S) ->
@@ -187,8 +218,8 @@ query_parts([Term|Rest], Acc, Tmpl, Set) ->
 	end.
 
 query_parts_from_call(Term,Rest,Acc,Set) ->
-	{Mod,Fn} = mod_fn(Term),
-	case {Mod,Fn} of
+	{M,F} = mod_fn(Term),
+	case {maybe_atom(M),maybe_atom(F)} of
 		{lergic,fn} ->
 			%intended for functions that can return false
 			Call = Term,
@@ -205,8 +236,8 @@ query_parts_from_call(Term,Rest,Acc,Set) ->
 				erl_syntax:list([Call])
 			)),
 			{Rest,[Test,Generator|Acc],Var,Set2};
-		{lergic,_} -> throw({lergic,nested_lergic_transform,Fn,Term});
-		{Mod,Fn} ->
+		{lergic,Fn} -> throw({lergic,nested_lergic_transform,Fn,Term});
+		{_Mod,_Fn} ->
 			Op = erl_syntax:application_operator(Term),
 			Args0 = erl_syntax:application_arguments(Term),
 			{NewArgs,Template,Rest2,Set2} =
@@ -279,17 +310,17 @@ is_guard(Term) ->
 
 freshen_variables(Terms0,Rest0,Set0) ->
 	% io:format("Freshen ~p~n",[Terms0]),
+	try
 	{Terms,{LHS,Rest,Set}} = parse_trans:transform(fun do_freshen/4,
 		{Terms0,Rest0,Set0},
 		Terms0,
 		[]
 	),
-	{Terms,LHS,Rest,Set}.
+	{Terms,LHS,Rest,Set}
+	catch _:Err -> io:format("freshen error ~p~n",[Err]), throw(Err) end.
 
 do_freshen(underscore,V,_Ctx,{LHS,Rest,Set}) ->
-	EnvVars = sets:from_list(proplists:append_values(env, erl_syntax:get_ann(V))),
-	AllVars = sets:union(Set,EnvVars),
-	{NVN,Set2} = unused_variable_name(AllVars),
+	{NVN,Set2} = unused_variable_name(Set),
 	% io:format("replace underscore with ~p~n",[NVN]),
 	LHS2 = replace_first_underscore(LHS,NVN),
 	V2 = dup(V, erl_syntax:atom('_')),
@@ -301,7 +332,7 @@ do_freshen(variable,V,_Ctx,{LHS,Rest,Set}) ->
 	%EVEN IF the variable is bound in set, we still need a fresh variable on the LHS
 	%        because generators require their LHS to have no free vars.
 	% otherwise, make a fresh variable and:
-	{NVN,Set2} = unused_variable_name(AllVars),
+	{NVN,Set2} = unused_variable_name(Set),
 	%   in either case, deep-replace all future occurrences of the variable in Rest and LHS with the fresh variable
 	LHS2 = replace_variables(LHS,VN,NVN),
 	% io:format("Old LHS:~p~nNew LHS:~p~n",[LHS,LHS2]),
@@ -320,8 +351,10 @@ do_freshen(_,T,_Ctx,{LHS,Rest,Set}) ->
 	{T,true,{LHS,Rest,Set}}.
 
 replace_variables(Trees,OldName,NewName) when is_list(Trees) ->
+	try
 	{Terms,_S} = parse_trans:transform(fun do_replace_variables/4, {OldName,NewName}, Trees, []),
-	Terms;
+	Terms
+	catch _:Err -> io:format("replace variables error ~p~n",[Err]),throw(Err) end;
 replace_variables(Tree,OldName,NewName) ->
 	hd(replace_variables([Tree],OldName,NewName)).
 
@@ -336,6 +369,7 @@ do_replace_variables(_,T,_Ctx,S) ->
 
 
 replace_first_underscore(Trees,NewName) when is_list(Trees) ->
+	try
 	{Terms,_FoundAny} = parse_trans:transform(
 		fun(underscore,T,_Ctx,false) ->
 			T2 = dup(T, erl_syntax:variable(NewName)),
@@ -347,23 +381,24 @@ replace_first_underscore(Trees,NewName) when is_list(Trees) ->
 		Trees,
 		[]
 	),
-	Terms;
+	Terms
+	catch _:Err -> io:format("replace underscore error ~p~n", [Err]) end;
 replace_first_underscore(Tree,NewName) ->
 	hd(replace_first_underscore([Tree],NewName)).
 
 mod_fn(T) ->
 	Op = erl_syntax:application_operator(T),
 	case erl_syntax:type(Op) of
-		atom -> {undefined,erl_syntax:atom_value(Op)};
 		module_qualifier ->
 			M = erl_syntax:module_qualifier_argument(Op),
 			F = erl_syntax:module_qualifier_body(Op),
-			{erl_syntax:atom_value(M),erl_syntax:atom_value(F)};
-		_ -> {undefined,Op}
+			{M,F};
+		_ ->
+			{undefined,Op}
 	end.
 
 var_name(I) ->
-	list_to_atom("_V"++integer_to_list(I)).
+	list_to_atom("_LERG_"++integer_to_list(I)).
 
 unused_variable_name(Used) ->
 	V = erl_syntax_lib:new_variable_name(fun var_name/1, Used),
