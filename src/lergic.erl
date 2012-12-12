@@ -85,7 +85,7 @@ parse_transform(Forms, Options) ->
 	),
 	% io:format("INPUT ~p~n", [AnnotatedForms]),
 	% io:format("OUTPUT ~p~n", [Forms1]),
-	% parse_trans:pp_src(parse_trans:revert(Forms1), "out.txt"),
+	parse_trans:pp_src(parse_trans:revert(Forms1), "out.txt"),
 	parse_trans:revert(Forms1).
 
 do_transform(application, T, _Ctx, S) ->
@@ -93,11 +93,9 @@ do_transform(application, T, _Ctx, S) ->
 	case {Mod,Fn,lists:member(Fn,?LERGIC_QUERIES)} of
 		{lergic,Fn,true} ->
 			{T2,S2} = transform_lergic_call(T,S),
-			{T2,true,S2};
-		{lergic,fn,false} ->
-			{fn_to_call(T),false,S};
+			{T2,false,S2};
 		{Mod,Fn,false} ->
-			{call_to_rel(T),true,S}
+			{T,true,S}
 	end;
 do_transform(_,T,_,S) ->
 	{T,true,S}.
@@ -116,10 +114,10 @@ call_to_rel(Term) ->
 		erl_syntax:application_arguments(Term)
 	)).
 
-
 deep_copy_pos(T,Dest) ->
 	{[Ret],_} = parse_trans:transform(
 		fun(_Type,TN,_,_) ->
+			% io:format("Trying to copy into ~p~n",[TN]),
 			{dup(T,TN),true,undefined}
 		end,
 		undefined,
@@ -129,44 +127,56 @@ deep_copy_pos(T,Dest) ->
 
 transform_lergic_call(T,Used) ->
 	Args0 = erl_syntax:application_arguments(T),
-	{Body,Template,BoundN} = case query_parts(Args0,[],Used) of
-		{NewArgs,Tmpl,Set} ->
+	{Body,Template,Used2} = case query_parts(Args0,[],undefined,Used) of
+		{NewArgs,Tmpl,Set} when Tmpl =/= undefined ->
 			{lists:reverse(NewArgs),Tmpl,Set};
-		{NewArgs=[Last|_Rest],Set} ->
-			{lists:reverse(NewArgs),
-			case erl_syntax:type(Last) of
-				generator -> erl_syntax:generator_pattern(Last);
-				_ -> erl_syntax:atom(true)
-			end,
-			Set};
 		Result ->
 			io:format("Got result ~p~nfor T ~p~n", [Result,T]),
 			throw({bad_query_parts,Result})
 	end,
 	[Comp] = parse_trans:revert([erl_syntax:list_comp(Template,Body)]),
-	Ret = deep_copy_pos(T,erl_syntax:application(
+	CompStr =	lists:flatten(erl_pp:expr(hd(parse_trans:revert([T])))),
+	Ret0 = erl_syntax:application(
 		erl_syntax:application_operator(T),
 		[
-			lists:flatten(erl_pp:expr(hd(parse_trans:revert([T])))),
+			erl_syntax:string(CompStr),
 			Comp
 		]
-	)),
-	{Ret,BoundN}.
+	),
+	Ret1 = deep_copy_pos(T,Ret0),
+	{[Ret2],_} = parse_trans:transform(fun do_munge_functions/4,
+		undefined,
+		[Ret1],
+		[]
+	),
+	{Ret2,Used2}.
 
-query_parts([], Acc, Set) -> {Acc,Set};
-query_parts([Term|Rest], Acc, Set) ->
+do_munge_functions(application,T,_Ctx,S) ->
+	case mod_fn(T) of
+		{lergic,fn} ->
+			{fn_to_call(T),false,S};
+		{lergic,_Fn} ->
+			{T,true,S};
+		{_Mod,_Fn} ->
+			{call_to_rel(T),true,S}
+	end;
+do_munge_functions(_Type,T,_Ctx,S) ->
+	{T,true,S}.
+
+query_parts([], Acc, Tmpl, Set) -> {Acc,Tmpl,Set};
+query_parts([Term|Rest], Acc, Tmpl, Set) ->
 	case erl_syntax:type(Term) of
 		application ->
-			{Rest2,Acc2,Set2} = query_parts_from_call(Term,Rest,Acc,Set),
-			query_parts(Rest2,Acc2,Set2);
-		match ->
-			{Rest2,Acc2,Set2} = query_parts_from_match(Term,Rest,Acc,Set),
-			query_parts(Rest2,Acc2,Set2);
+			{Rest2,Acc2,Tmpl2,Set2} = query_parts_from_call(Term,Rest,Acc,Set),
+			query_parts(Rest2,Acc2,Tmpl2,Set2);
+		match_expr ->
+			{Rest2,Acc2,Tmpl2,Set2} = query_parts_from_match(Term,Rest,Acc,Set),
+			query_parts(Rest2,Acc2,Tmpl2,Set2);
 		Type when Type == infix_expr; Type == prefix_expr ->
 			%replace matches against ops with primitive predicates and anything else with a bind
-			case query_parts_from_operator(Term,Rest,Acc,Set) of
-				{finished,Acc,Term,Set} -> {Acc,Term,Set};
-				{Rest2,Acc2,Set2} -> query_parts(Rest2,Acc2,Set2)
+			case query_parts_from_operator(Term,Rest,Acc,Tmpl,Set) of
+				{finished,Acc,Tmpl2,Set} -> {Acc,Tmpl2,Set};
+				{Rest2,Acc2,Tmpl2,Set2} -> query_parts(Rest2,Acc2,Tmpl2,Set2)
 			end;
 		_ when Rest == [] ->
 			%it's a value expression, we're done!
@@ -181,14 +191,20 @@ query_parts_from_call(Term,Rest,Acc,Set) ->
 	case {Mod,Fn} of
 		{lergic,fn} ->
 			%intended for functions that can return false
-			Call = fn_to_call(Term),
-			{V,Set2} = unused_variable_name(Set),
-			Test = dup(Term,V),
+			Call = Term,
+			{VN,Set2} = unused_variable_name(Set),
+			Var = dup(Term,erl_syntax:variable(VN)),
+			Test = dup(Term, erl_syntax:infix_expr(
+				Var,
+				dup(Term,erl_syntax:operator('=/=')),
+				dup(Term,erl_syntax:atom(false))
+			)),
+			% io:format("Test:~p~n,Call:~p~n",[Test,Call]),
 			Generator = dup(Term,erl_syntax:generator(
-				Test,
+				Var,
 				erl_syntax:list([Call])
 			)),
-			{Rest,[Test,Generator|Acc],Set2};
+			{Rest,[Test,Generator|Acc],Var,Set2};
 		{lergic,_} -> throw({lergic,nested_lergic_transform,Fn,Term});
 		{Mod,Fn} ->
 			Op = erl_syntax:application_operator(Term),
@@ -199,14 +215,16 @@ query_parts_from_call(Term,Rest,Acc,Set) ->
 				[Unit] -> Unit;
 				Template -> erl_syntax:tuple(Template)
 			end,
+			Call = dup(Term,erl_syntax:application(Op, NewArgs)),
+			% io:format("Bound:~p~n,Call:~p~n",[BoundPattern,Call]),
 			Generator = dup(Term,
 				erl_syntax:generator(
 					BoundPattern,
 					%we're going to keep digging, so don't tack on the rel_ yet.
-					erl_syntax:application(Op, NewArgs)
+					Call
 				)
 			),
-			{Rest2,[Generator|Acc],Set2}
+			{Rest2,[Generator|Acc],BoundPattern,Set2}
 	end.
 
 %turn matches into "X from Y", i.e. generators
@@ -215,34 +233,39 @@ query_parts_from_match(Term,Rest,Acc,Set) ->
 	L = erl_syntax:match_expr_pattern(Term),
 	R = erl_syntax:match_expr_body(Term),
 	%replace matches against ops with primitive predicates and anything else with a bind
-	RHS = dup(R,case erl_syntax:type(R) of
+	{OpName, BoundPattern, RHS2, Rest2, Set2} = case erl_syntax:type(R) of
 		prefix_expr ->
 			Op = erl_syntax:prefix_expr_operator(R),
 			UR = erl_syntax:prefix_expr_argument(R),
-			erl_syntax:application(erl_syntax:atom(lergic), Op, [UR,L]);
+			{RHS1,Template,Rest1,Set1} = freshen_variables([UR,L], Rest, Set),
+			{Op,dup(Term,erl_syntax:tuple(Template)),RHS1,Rest1,Set1};
 		infix_expr ->
 			Op = erl_syntax:infix_expr_operator(R),
 			LR = erl_syntax:infix_expr_left(R),
 			RR = erl_syntax:infix_expr_right(R),
-			erl_syntax:application(erl_syntax:atom(lergic), erl_syntax:atom(Op), [LR,RR,L]);
-		application ->
-			erl_syntax:application(erl_syntax:atom(lergic), erl_syntax:atom(bind), [L,R])
-	end),
-	{NewRHS,Template,NewRest,NewSet} =
-		freshen_variables(erl_syntax:application_arguments(RHS), Rest, Set),
+			{RHS1,Template,Rest1,Set1} = freshen_variables([LR,RR,L], Rest, Set),
+			{Op,dup(Term,erl_syntax:tuple(Template)),RHS1,Rest1,Set1};
+		_ ->
+			{[L1],Template,Rest1,Set1} = freshen_variables([L], Rest, Set),
+			{erl_syntax:atom(bind),hd(Template),[L1,R],Rest1,Set1}
+	end,
+	Call = dup(Term,
+		erl_syntax:application(erl_syntax:atom(lergic), OpName, RHS2)
+	),
+	% io:format("match bind pattern ~p~ncall ~p~n",[BoundPattern,Call]),
 	Generator = dup(Term,
 		erl_syntax:generator(
-			erl_syntax:tuple(Template),
-			NewRHS
+			BoundPattern,
+			Call
 		)
 	),
-	{NewRest,[Generator|Acc],NewSet}.
+	{Rest2,[Generator|Acc],BoundPattern,Set2}.
 
-query_parts_from_operator(Term,Rest,Acc,Set) ->
+query_parts_from_operator(Term,Rest,Acc,Tmpl,Set) ->
 	case is_guard(Term) of
 		true ->
 			%it's a guard, leave it as-is
-			{Rest,[Term|Acc],Set};
+			{Rest,[Term|Acc],Tmpl,Set};
 		false when Rest == []->
 			%it's a value expression, we're done!
 			{finished,Acc,Term,Set};
@@ -256,7 +279,11 @@ is_guard(Term) ->
 
 freshen_variables(Terms0,Rest0,Set0) ->
 	% io:format("Freshen ~p~n",[Terms0]),
-	{Terms,{LHS,Rest,Set}} = parse_trans:transform(fun do_freshen/4, {Terms0,Rest0,Set0}, Terms0, []),
+	{Terms,{LHS,Rest,Set}} = parse_trans:transform(fun do_freshen/4,
+		{Terms0,Rest0,Set0},
+		Terms0,
+		[]
+	),
 	{Terms,LHS,Rest,Set}.
 
 do_freshen(underscore,V,_Ctx,{LHS,Rest,Set}) ->

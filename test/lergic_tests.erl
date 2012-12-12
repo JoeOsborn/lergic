@@ -1,9 +1,46 @@
--module(council_tests).
--compile({parse_transform,lergic}).
+-module(lergic_tests).
 -include_lib("eunit/include/eunit.hrl").
+-compile({parse_transform,lergic}).
 
-fn_test() -.
+fail_test() ->
+	?assertEqual([], lergic:all(
+		A = 1,
+		A = 2
+	)),
+	?assertEqual([1], lergic:all(
+		A = 1,
+		A = 1
+	)),
+	?assertEqual([2], lergic:all(
+		A = 1,
+		B = 2
+	)),
+	?assertEqual([{1,1}], lergic:all(
+		A = 1,
+		B = A,
+		{A,B}
+	)),
+	C = 2,
+	?assertEqual([{1,2}], lergic:all(
+		A = 1,
+		B = C,
+		{A,B}
+	)),
+	?assertEqual([], lergic:all(
+		A = 1,
+		B = A,
+		B = C
+	)),
+	ok
+	.
+
+fn_test() ->
 	A = 2,
+	?assert(odd(3)),
+	?assertNot(odd(2)),
+	?assertNot(odd(4)),
+	?assertEqual(4,double(2)),
+	?assertEqual(8,double(4)),
 	?assertEqual({2,4}, lergic:one(
 		cool_number(A),
 		B = lergic:fn(double(A)),
@@ -16,7 +53,7 @@ fn_test() -.
 		lergic:fn(double(V))
 	)).
 
-cool_number(V) ->
+rel_cool_number(V) ->
 	[VV || N <- [2,3,4],
 				 VV <- lergic:bind(V,N)].
 
@@ -69,18 +106,16 @@ compound_terms_and_disj_rel_test() ->
 %bidirectional link relation.
 %maps from L1,L2 <-> [L1,L2] and L2,L1 <-> [L1,L2],
 %if [L1,L2] is a link in AllLinks.
-link_between(L1,L2,LinkPair) ->
+rel_link_between(L1,L2,LinkPair) ->
 	AllLinks = [[{term,a},{term,b}]],
 	lists:usort(
 		[{L1V,L2V,[LA,LB]} ||
 			ThisLink <- AllLinks,
-			LsV <- bind(LinkPair,ThisLink)
-			[LA,LB] <- LsV,
-			L1V <- bind(L1,LA),
-			L2V <- bind(L2,LB)]++
+			[LA,LB] <- lergic:bind(LinkPair,ThisLink),
+			L1V <- lergic:bind(L1,LA),
+			L2V <- lergic:bind(L2,LB)]++
 		[{L1V,L2V,[LA,LB]} ||
 			ThisLink <- AllLinks,
-			LsV <- bind(LinkPair,ThisLink)
-			[LA,LB] <- LsV,
-			L2V <- bind(L2,LA),
-			L1V <- bind(L1,LB)]).
+			[LA,LB] <- lergic:bind(LinkPair,ThisLink),
+			L2V <- lergic:bind(L2,LA),
+			L1V <- lergic:bind(L1,LB)]).
