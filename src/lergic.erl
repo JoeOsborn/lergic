@@ -146,7 +146,7 @@ deep_copy_pos(T,Dest) ->
 	Ret.
 
 lergic_public_to_private(Op) ->
-	PublicName = erl_syntax:atom_value(erl_syntax:module_qualifier_argument(Op)),
+	PublicName = erl_syntax:atom_value(erl_syntax:module_qualifier_body(Op)),
 	PrivateName = list_to_atom(atom_to_list(PublicName)++"_"),
 	dup(Op,erl_syntax:module_qualifier(
 		erl_syntax:atom(lergic),
