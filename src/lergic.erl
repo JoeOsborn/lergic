@@ -31,12 +31,16 @@
 
 %public API
 
+-spec all_(string(),[A]) -> [A] when A :: term().
 all_(_LC,Results) -> Results.
+-spec maybe_(string(),[A]) -> false | [A] when A :: term().
 maybe_(_LC,[]) -> false;
 maybe_(_LC,Results) -> Results.
+-spec one_(string(),[A]) -> A when A :: term().
 one_(_LC,[Result]) -> Result;
 one_(LC,Results) -> throw({lergic, expected_one, LC, Results}).
 
+-spec bind('_'|{any,[A]}|A,A) -> [A] when A :: term().
 bind('_',V) -> [V];
 bind({any,AVs},V) ->
 	case lists:member(V,AVs) of
@@ -61,12 +65,16 @@ bind(A,V) when is_list(A), is_list(V), length(A) == length(V) ->
 bind(_A,_V) -> [].
 
 %faux API
-
+-spec all(list()) -> no_return().
 all(R) -> untransformed(all,R).
+-spec one(list()) -> no_return().
 one(R) -> untransformed(one,R).
+-spec maybe(list()) -> no_return().
 maybe(R) -> untransformed(maybe,R).
+-spec fn(term()) -> no_return().
 fn(R) -> untransformed(fn,R).
 
+-spec untransformed(atom(),term()) -> no_return().
 untransformed(F,R) ->
 	throw({lergic,untransformed,F,
 		"Please use the lergic parse transform when compiling this query",
