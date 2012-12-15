@@ -32,13 +32,15 @@
 %public API
 
 -spec all_(string(),[A]) -> [A] when A :: term().
-all_(_LC,Results) -> Results.
+all_(_LC,Results) -> lists:usort(Results).
 -spec maybe_(string(),[A]) -> false | [A] when A :: term().
 maybe_(_LC,[]) -> false;
-maybe_(_LC,Results) -> Results.
+maybe_(_LC,Results) -> lists:usort(Results).
 -spec one_(string(),[A]) -> A when A :: term().
-one_(_LC,[Result]) -> Result;
-one_(LC,Results) -> throw({lergic, expected_one, LC, Results}).
+one_(LC,Results) -> case lists:usort(Results) of
+	[One] -> One;
+	UResults -> throw({lergic, expected_one, LC, UResults})
+end.
 
 -spec bind('_'|{any,[A]}|A,A) -> [A] when A :: term().
 bind('_',V) -> [V];
@@ -303,7 +305,9 @@ query_parts_from_match(Term,Rest,Acc,Set) ->
 query_parts_from_operator(Term,Rest,Acc,Tmpl,Set) ->
 	case is_guard(Term) of
 		true ->
-			%it's a guard, leave it as-is
+			%it's a guard, leave it as-is and hope both sides are bound.
+			%later, turn it into a relation with the same semantics
+			%that could potentially generate examples.
 			{Rest,[Term|Acc],Tmpl,Set};
 		false when Rest == []->
 			%it's a value expression, we're done!
