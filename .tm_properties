@@ -1,2 +1,3 @@
 ERL_APPS = "erts kernel stdlib mnesia compiler crypto \
   syntax_tools parse_trans edown"
+ERL_TEST = "eunit"
