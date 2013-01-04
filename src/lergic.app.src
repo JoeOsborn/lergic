@@ -2,6 +2,6 @@
   {description, "Logic programming DSL"},
   {vsn, git},
   {registered, []},
-  {applications, [kernel, stdlib, syntax_tools, parse_trans]},
+  {applications, [kernel, stdlib]},
   {env, []}
 ]}.

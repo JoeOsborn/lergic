@@ -31,6 +31,11 @@ matching_test() ->
 		B = A,
 		B = C
 	)),
+	lergic:one(A=1),
+	lergic:one(A=2),
+	A = 1,
+	lergic:one(A=1),
+	?assertEqual([],lergic:all(A=2)),
 	ok
 	.
 

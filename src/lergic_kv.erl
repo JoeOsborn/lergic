@@ -28,11 +28,10 @@
 %parse transform
 
 parse_transform(Forms, Options) ->
-	AnnotatedForms = [erl_syntax_lib:annotate_bindings(F,[]) || F <- Forms],
 	{Forms1,_S1} = parse_trans:transform(
 		fun do_transform/4,
 		{none,sets:new()},
-		AnnotatedForms,
+		Forms,
 		Options
 	),
 	% io:format("INPUT ~p~n", [AnnotatedForms]),
@@ -59,26 +58,44 @@ do_transform(attribute,T,_Ctx,S={_Lookup,Used}) ->
 			{T,true,{{lookup,Rel},Used}};
 		_ -> {T,true,S}
 	end;
-do_transform(application, T, Ctx, S={Lookup,Used}) ->
+do_transform(function, T, Ctx, {Lookup,Used}) ->
+	%on each pass through a function, change one query into an LC,
+	%then re-analyze variable bindings. This is to avoid bindings from
+	%one leaking out in the naive analysis and then poisoning later LCs.
+	case parse_trans:transform(
+		fun do_fun_transform/4,
+		{false,Lookup,Used},
+		[erl_syntax_lib:annotate_bindings(T,[])],
+		[]
+	) of
+		{[NewT],{false,_,Used2}} -> 
+			{NewT, false, {Lookup,Used2}};
+		{[NewT],{true,_,Used2}} -> 
+			do_transform(function, NewT, Ctx, {Lookup,Used2})
+	end;
+do_transform(_,T,_,S) ->
+	{T,true,S}.
+
+do_fun_transform(_, T, _Ctx, S={true,_Lookup,_Used}) -> {T,true,S};
+do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
 	% io:format("maybe transform ~p~n",[T]),
 	{M,F} = mod_fn(T),
 	% io:format("MFN:~p~n",[{M,F}]),
 	try
 	case {
 		maybe_atom(M),
-		maybe_atom(F),
 		lists:member(maybe_atom(F),?LERGIC_QUERIES)
 	} of
-		{lergic,_Fn,true} ->
+		{lergic,true} ->
 			% io:format("transforming call~n"),
 			{T2,Used2} = transform_lergic_call(T,Lookup,Used),
 			% io:format("transformed call~n"),
-			{T2,false,{Lookup,Used2}};
-		{_Mod,_Fn,false} ->
+			{T2,false,{true,Lookup,Used2}};
+		_ ->
 			{T,true,S}
 	end
 	catch _:Err -> io:format("top level error ~p~n",[{Ctx,Err}]), throw(Err) end;
-do_transform(_,T,_,S) ->
+do_fun_transform(_,T,_,S) ->
 	{T,true,S}.
 
 fn_to_call(Term) ->
@@ -230,7 +247,7 @@ lookup_operator(Op,{lookup,Rel}) ->
 	end.
 
 relation_query(Op, Key, Value, Rest, Lookup, Set) ->
-	% io:format("turn ~p(~p,~p) into rel~n",[Op,Key,Value]),
+	io:format("turn ~p(~p,~p) into rel~n",[Op,Key,Value]),
 	{NewKeyArgs,KeyTemplate,Rest2,Set2} = freshen_variables(Key,Rest,Set),
 	{[NewValArg],[ValTemplate],Rest3,Set3} = case Value of
 		undefined -> 
@@ -238,7 +255,10 @@ relation_query(Op, Key, Value, Rest, Lookup, Set) ->
 			ValVar = erl_syntax:variable(VN),
 			{[erl_syntax:atom('_')],[ValVar],Rest2,Set2_1};
 		Value -> 
-			freshen_variables([Value],Rest2,Set2)
+			%we dup op's properties into Value so that
+			%the right variable-binding-status is given.
+			io:format("Op ~p~nVal ~p~n",[Op,Value]),
+			freshen_variables([dup(Op,Value)],Rest2,Set2)
 	end,
 	KeyPattern = dup(Op,erl_syntax:list(KeyTemplate)),
 	BoundPattern = dup(Op,erl_syntax:tuple([
@@ -379,9 +399,8 @@ do_freshen(variable,V,_Ctx,{LHS,Rest,Set}) ->
 	VN = erl_syntax:variable_name(V),
 	%EVEN IF the variable is bound in set, we still need a fresh variable on the LHS
 	%        because generators require their LHS to have no free vars.
-	% otherwise, make a fresh variable and:
 	{NVN,Set2} = unused_variable_name(Set),
-	%   in either case, deep-replace all future occurrences of the variable in Rest and LHS with the fresh variable
+	%   deep-replace all future occurrences of the variable in Rest and LHS with the fresh variable
 	LHS2 = replace_variables(LHS,VN,NVN),
 	% io:format("Old LHS:~p~nNew LHS:~p~n",[LHS,LHS2]),
 	Rest2 = replace_variables(Rest,VN,NVN),

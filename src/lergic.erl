@@ -114,32 +114,48 @@ do_transform(attribute,T,_Ctx,S={_Lookup,Used}) ->
 		{lergic,[Arg]} -> 
 			[Prop,Val] = erl_syntax:tuple_elements(Arg),
 			{lookup,Rel} = {maybe_atom(Prop),maybe_atom(Val)},
-			io:format("lookup to ~p~n",[Rel]),
 			{T,true,{{lookup,Rel},Used}};
-		_ -> 
-			io:format("skip attr ~p~n",[T]),
-			{T,true,S}
+		_ -> {T,true,S}
 	end;
-do_transform(application, T, Ctx, S={Lookup,Used}) ->
+do_transform(function, T, Ctx, {Lookup,Used}) ->
+	%on each pass through a function, change one query into an LC,
+	%then re-analyze variable bindings. This is to avoid bindings from
+	%one leaking out in the naive analysis and then poisoning later LCs.
+	case parse_trans:transform(
+		fun do_fun_transform/4,
+		{false,Lookup,Used},
+		[erl_syntax_lib:annotate_bindings(T,[])],
+		[]
+	) of
+		{[NewT],{false,_,Used2}} -> 
+			{NewT, false, {Lookup,Used2}};
+		{[NewT],{true,_,Used2}} -> 
+			do_transform(function, NewT, Ctx, {Lookup,Used2})
+	end;
+do_transform(_,T,_,S) ->
+	{T,true,S}.
+
+do_fun_transform(_, T, _Ctx, S={true,_Lookup,_Used}) -> 
+	{T,true,S};
+do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
 	% io:format("maybe transform ~p~n",[T]),
 	{M,F} = mod_fn(T),
 	% io:format("MFN:~p~n",[{M,F}]),
 	try
 	case {
 		maybe_atom(M),
-		maybe_atom(F),
 		lists:member(maybe_atom(F),?LERGIC_QUERIES)
 	} of
-		{lergic,_Fn,true} ->
+		{lergic,true} ->
 			% io:format("transforming call~n"),
 			{T2,Used2} = transform_lergic_call(T,Lookup,Used),
 			% io:format("transformed call~n"),
-			{T2,false,{Lookup,Used2}};
-		{_Mod,_Fn,false} ->
+			{T2,false,{true,Lookup,Used2}};
+		_ ->
 			{T,true,S}
 	end
-	catch _:Err -> io:format("top level error ~p~n",[{Ctx,Err}]), throw(Err) end;
-do_transform(_,T,_,S) ->
+	catch _:Err -> io:format("top level error ~p~n",[{Ctx,Err}]), error(Err) end;
+do_fun_transform(_,T,_,S) ->
 	{T,true,S}.
 
 
