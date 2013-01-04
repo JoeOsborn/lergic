@@ -247,7 +247,7 @@ lookup_operator(Op,{lookup,Rel}) ->
 	end.
 
 relation_query(Op, Key, Value, Rest, Lookup, Set) ->
-	io:format("turn ~p(~p,~p) into rel~n",[Op,Key,Value]),
+	% io:format("turn ~p(~p,~p) into rel~n",[Op,Key,Value]),
 	{NewKeyArgs,KeyTemplate,Rest2,Set2} = freshen_variables(Key,Rest,Set),
 	{[NewValArg],[ValTemplate],Rest3,Set3} = case Value of
 		undefined -> 
@@ -257,7 +257,7 @@ relation_query(Op, Key, Value, Rest, Lookup, Set) ->
 		Value -> 
 			%we dup op's properties into Value so that
 			%the right variable-binding-status is given.
-			io:format("Op ~p~nVal ~p~n",[Op,Value]),
+			% io:format("Op ~p~nVal ~p~n",[Op,Value]),
 			freshen_variables([dup(Op,Value)],Rest2,Set2)
 	end,
 	KeyPattern = dup(Op,erl_syntax:list(KeyTemplate)),
