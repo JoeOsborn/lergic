@@ -77,19 +77,24 @@ odd(V) -> (V rem 2) == 1.
 double(V) -> V*2.
 
 compound_terms_and_disj_rel_test() ->
+	ExpectedValue = [[{term,a},{term,b}]],
 	ExpectedOrderA = [{[{term,a},{term,b}],[{term,a},{term,b}]}],
 	ExpectedOrderB = [{[{term,b},{term,a}],[{term,a},{term,b}]}],
 	?assertEqual(ExpectedOrderA++ExpectedOrderB, lergic:all(
+		Ret = link_between(AnyA,AnyB))),
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between(AnyA,AnyB))),
-	?assertEqual(ExpectedOrderA, lergic:all(
+	?assertEqual(ExpectedOrderA++ExpectedOrderB, lergic:all(
+		[_RetA,_RetB] = link_between(AnyA,AnyB))),
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between(AnyA,{term,b}))),
-	?assertEqual(ExpectedOrderA, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,a},AnyB))),
-	?assertEqual(ExpectedOrderB, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,b},{term,a}))),
 	?assertEqual(ExpectedOrderB, lergic:all(
 		[{term,a},{term,b}] = link_between({term,b},{term,a}))),
-	?assertEqual(ExpectedOrderA, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,a},{term,b}))),
 	?assertEqual(ExpectedOrderA, lergic:all(
 		[{term,a},{term,b}] = link_between({term,a},{term,b}))),
@@ -99,19 +104,19 @@ compound_terms_and_disj_rel_test() ->
 		[{term,a},_] = link_between({term,a},{term,b}))),
 	?assertEqual(ExpectedOrderA, lergic:all(
 		[_,{term,b}] = link_between({term,a},{term,b}))),
-	?assertEqual(ExpectedOrderB, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,b},_))),
-	?assertEqual(ExpectedOrderB, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between(_,{term,a}))),
-	?assertEqual(ExpectedOrderA++ExpectedOrderB, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between(_,{term,_}))),
-	?assertEqual(ExpectedOrderB, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,_},{term,a}))),
-	?assertEqual(ExpectedOrderA, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,a},{term,_}))),
-	?assertEqual(ExpectedOrderB, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,b},{term,_}))),
-	?assertEqual(ExpectedOrderA, lergic:all(
+	?assertEqual(ExpectedValue, lergic:all(
 		link_between({term,_},{term,b}))),
 	?assertEqual(ExpectedOrderA++ExpectedOrderB, lergic:all(
 		[{term,a},{term,b}] = link_between(_,_))),

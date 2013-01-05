@@ -87,7 +87,11 @@ untransformed(F,R) ->
 %parse transform
 
 parse_transform(Forms, Options) ->
-	AnnotatedForms = [erl_syntax_lib:annotate_bindings(F,[]) || F <- Forms],
+	% io:format("running lergic in ~p~n",[hd(Forms)]),
+  Attributes = [A || {attribute, _, _, _}=A <- Forms],
+	Others = [B || B <- Forms, element(1,B) =/= attribute],
+	AnnotatedForms = [erl_syntax_lib:annotate_bindings(F,[]) || 
+		F <- Attributes++Others],
 	{Forms1,_S1} = parse_trans:transform(
 		fun do_transform/4,
 		{none,sets:new()},

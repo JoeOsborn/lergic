@@ -2,6 +2,7 @@
 %the -lergic(lookup,Rel) attribute will turn calls
 % of the form [V = ]module:relation(K...) into module:Rel(relation,K...,V).
 -define(LERGIC_QUERIES,[all,maybe,one]).
+-export([all_/2, maybe_/2, one_/2]).
 %parse transform
 -export([parse_transform/2]).
 -export([do_transform/4, do_freshen/4, do_replace_variables/4]).
@@ -25,17 +26,33 @@
 % {[CIDV],CV} <- rel_char([CIDV],'_')]
 % where '_' is specially interpreted by these relations.
 
+-spec all_(string(),[A]) -> [A] when A :: term().
+all_(_LC,Results) -> lists:usort(Results).
+-spec maybe_(string(),[A]) -> false | [A] when A :: term().
+maybe_(_LC,[]) -> false;
+maybe_(_LC,Results) -> lists:usort(Results).
+-spec one_(string(),[A]) -> A when A :: term().
+one_(LC,Results) -> case lists:usort(Results) of
+	[One] -> One;
+	UResults -> throw({lergic, expected_one, LC, UResults})
+end.
+
+
 %parse transform
 
 parse_transform(Forms, Options) ->
+  Attributes = [A || {attribute, _, _, _}=A <- Forms],
+	Others = [B || B <- Forms, element(1,B) =/= attribute],
+	AnnotatedForms = [erl_syntax_lib:annotate_bindings(F,[]) || 
+		F <- Attributes++Others],
 	{Forms1,_S1} = parse_trans:transform(
 		fun do_transform/4,
 		{none,sets:new()},
-		Forms,
+		AnnotatedForms,
 		Options
 	),
 	% io:format("INPUT ~p~n", [AnnotatedForms]),
-	% io:format("OUTPUT ~p~n", [Forms1]),
+	% io:format("OUTPUT ~p~n", [parse_trans:revert(Forms1)]),
 	parse_trans:pp_src(parse_trans:revert(Forms1), "out.txt"),
 	parse_trans:revert(Forms1).
 
@@ -87,7 +104,7 @@ do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
 		lists:member(maybe_atom(F),?LERGIC_QUERIES)
 	} of
 		{lergic,true} ->
-			% io:format("transforming call~n"),
+			% io:format("transforming call ~p~n",[T]),
 			{T2,Used2} = transform_lergic_call(T,Lookup,Used),
 			% io:format("transformed call~n"),
 			{T2,false,{true,Lookup,Used2}};
@@ -131,7 +148,7 @@ lergic_public_to_private(Op) ->
 	PublicName = erl_syntax:atom_value(erl_syntax:module_qualifier_body(Op)),
 	PrivateName = list_to_atom(atom_to_list(PublicName)++"_"),
 	dup(Op,erl_syntax:module_qualifier(
-		erl_syntax:atom(lergic),
+		erl_syntax:atom(lergic_kv),
 		erl_syntax:atom(PrivateName)
 	)).
 
@@ -169,6 +186,8 @@ do_munge_functions(application,T,_Ctx,Lookup) ->
 		{lergic,fn} ->
 			{fn_to_call(T),false,Lookup};
 		{lergic,_Fn} ->
+			{T,true,Lookup};
+		{lergic_kv,_Fn} ->
 			{T,true,Lookup};
 		{_Mod,Fn} when is_atom(Fn), Lookup =/= none ->
 			{T,true,Lookup};
@@ -225,7 +244,9 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Set) ->
 			Op = erl_syntax:application_operator(Term),
 			Args0 = erl_syntax:application_arguments(Term),
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(Op,Args0,undefined,Rest,Lookup,Set),
-			{Rest2,lists:reverse(Parts)++Acc,BoundPattern,Set2}
+			%TODO: return just the Value part, not the Key part, as Boundpattern.
+			[_K,V] = erl_syntax:tuple_elements(BoundPattern),
+			{Rest2,lists:reverse(Parts)++Acc,V,Set2}
 	end.
 
 call_op_name(Op) ->
@@ -319,7 +340,7 @@ query_parts_from_match(Term,Rest,Acc,Lookup,Set) ->
 		{prefix_expr,_,_} ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(
 				dup(Term,erl_syntax:module_qualifier(
-					erl_syntax:atom(lergic),
+					erl_syntax:atom(lergic_kv),
 					erl_syntax:prefix_expr_operator(R)
 				)),
 				[erl_syntax:prefix_expr_argument(R)],
@@ -332,7 +353,7 @@ query_parts_from_match(Term,Rest,Acc,Lookup,Set) ->
 		{infix_expr,_,_} ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(
 				dup(Term,erl_syntax:module_qualifier(
-					erl_syntax:atom(lergic),
+					erl_syntax:atom(lergic_kv),
 					erl_syntax:infix_expr_operator(R)
 				)),
 				[erl_syntax:infix_expr_left(R),erl_syntax:infix_expr_right(R)],
@@ -366,6 +387,7 @@ query_parts_from_operator(Term,Rest,Acc,Tmpl,Set) ->
 			%that could potentially generate examples.
 			{Rest,[Term|Acc],Tmpl,Set};
 		false when Rest == []->
+			%TODO: should this be a relation instead, as in the match generator?
 			%it's a value expression, we're done!
 			{finished,Acc,Term,Set};
 		false ->
