@@ -119,7 +119,7 @@ do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
 		_ ->
 			{T,true,S}
 	end
-	catch _:Err -> io:format("top level error ~p~n",[{Ctx,Err}]), throw(Err) end;
+	catch _:Err -> io:format("top level error ~p~n",[{Ctx,Err,erlang:get_stacktrace()}]), throw(Err) end;
 do_fun_transform(_,T,_,S) ->
 	{T,true,S}.
 

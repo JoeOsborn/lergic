@@ -260,7 +260,8 @@ do_munge_functions(application,T,_Ctx,Lookup) ->
 do_munge_functions(_Type,T,_Ctx,Lookup) ->
 	{T,true,Lookup}.
 
-next_template('$prev','$prev') -> true;
+next_template('$prev','$prev') -> erl_syntax:atom(true);
+next_template(undefined,'$prev') -> erl_syntax:atom(true);
 next_template(Tmpl,'$prev') -> Tmpl;
 next_template(_Tmpl,Tmpl2) -> Tmpl2.
 
