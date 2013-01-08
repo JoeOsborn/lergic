@@ -61,17 +61,24 @@ fn_test() ->
 		boring_number(V),
 		V = lergic:fn(double(V)),
 		V
+	)),
+	?assertEqual([3,4], lergic:all(
+		cool_number(V),
+		lergic:none(
+			V2 = lergic:fn(double(V)),
+			cool_number(V2)
+		)
 	)).
 
 rel_boring_number([V],Val) ->
 	[{[VV],ValV} || N <- [0],
 	       VV <- lergic:bind(V,N),
-			   ValV <- lergic:bind(Val,true)].
+			   ValV <- lergic:bind(Val,VV)].
 
 rel_cool_number([V],Val) ->
 	[{[VV],ValV} || N <- [2,3,4],
 	       VV <- lergic:bind(V,N),
-			   ValV <- lergic:bind(Val,true)].
+			   ValV <- lergic:bind(Val,VV)].
 
 odd(V) -> (V rem 2) == 1.
 double(V) -> V*2.

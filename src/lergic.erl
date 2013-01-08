@@ -3,16 +3,18 @@
 % of the form module:relation(K...) into module:Rel(relation,K...).
 %public API
 %faux api visible in the parse transform:
--export([all/1, maybe/1, one/1, fn/1]).
--define(LERGIC_QUERIES,[all,maybe,one]).
+-export([all/1, maybe/1, one/1, none/1, fn/1]).
+-define(LERGIC_QUERIES,[all,maybe,one,none]).
 %for defining relations, hopefully hidden away eventually:
 -export([bind/2]).
 %transformed, actual API:
--export([all_/2, maybe_/2, one_/2]).
+-export([all_/2, maybe_/2, one_/2, none_/2]).
 %parse transform
 -export([parse_transform/2]).
 -export([do_transform/4, do_freshen/4, do_replace_variables/4]).
 -compile({parse_transform,parse_trans_codegen}).
+%internal API
+-export([public_to_private/2,next_template/2]).
 
 % example:
 % lergic:all(
@@ -43,6 +45,9 @@ one_(LC,Results) -> case lists:usort(Results) of
 	[One] -> One;
 	UResults -> throw({lergic, expected_one, LC, UResults})
 end.
+-spec none_(string(),[A]) -> A when A :: term().
+none_(_LC,[]) -> true;
+none_(_LC,_Some) -> false.
 
 -spec bind('_'|{any,[A]}|A,A) -> [A] when A :: term().
 bind('_',V) -> [V];
@@ -73,6 +78,8 @@ bind(_A,_V) -> [].
 all(R) -> untransformed(all,R).
 -spec one(list()) -> no_return().
 one(R) -> untransformed(one,R).
+-spec none(list()) -> no_return().
+none(R) -> untransformed(none,R).
 -spec maybe(list()) -> no_return().
 maybe(R) -> untransformed(maybe,R).
 -spec fn(term()) -> no_return().
@@ -153,8 +160,13 @@ do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
 		{lergic,true} ->
 			% io:format("transforming call~n"),
 			{T2,Used2} = transform_lergic_call(T,Lookup,Used),
+			{[T3],_} = parse_trans:transform(fun do_munge_functions/4,
+				Lookup,
+				[T2],
+				[]
+			),
 			% io:format("transformed call~n"),
-			{T2,false,{true,Lookup,Used2}};
+			{T3,false,{true,Lookup,Used2}};
 		_ ->
 			{T,true,S}
 	end
@@ -168,7 +180,11 @@ fn_to_call(Term) ->
 
 call_to_rel(Term) ->
 	{Mod,Fn} = mod_fn(Term),
-	RN = list_to_atom("rel_"++atom_to_list(maybe_atom(Fn))),
+	Name = atom_to_list(maybe_atom(Fn)),
+	RN = case lists:prefix("rel_", Name) of
+		true -> maybe_atom(Fn);
+		false -> list_to_atom("rel_"++atom_to_list(maybe_atom(Fn)))
+	end,
 	dup(Term, erl_syntax:application(
 		case Mod of
 			undefined -> dup(Term,erl_syntax:atom(RN));
@@ -192,13 +208,21 @@ deep_copy_pos(T,Dest) ->
 	),
 	Ret.
 
-lergic_public_to_private(Op) ->
+public_to_private(Mod,Op) ->
 	PublicName = erl_syntax:atom_value(erl_syntax:module_qualifier_body(Op)),
-	PrivateName = list_to_atom(atom_to_list(PublicName)++"_"),
-	dup(Op,erl_syntax:module_qualifier(
-		erl_syntax:atom(lergic),
-		erl_syntax:atom(PrivateName)
-	)).
+	case lists:member(PublicName,?LERGIC_QUERIES) of
+		true -> 
+			PrivateName = list_to_atom(atom_to_list(PublicName)++"_"),
+			dup(Op,erl_syntax:module_qualifier(
+				erl_syntax:atom(Mod),
+				erl_syntax:atom(PrivateName)
+			));
+		false ->
+			dup(Op,erl_syntax:module_qualifier(
+				erl_syntax:atom(Mod),
+				erl_syntax:atom(PublicName)
+			))
+	end.
 
 transform_lergic_call(T,Lookup,Used) ->
 	Args0 = erl_syntax:application_arguments(T),
@@ -212,21 +236,14 @@ transform_lergic_call(T,Lookup,Used) ->
 	[Comp] = parse_trans:revert([erl_syntax:list_comp(Template,Body)]),
 	CompStr =	lists:flatten(erl_pp:expr(hd(parse_trans:revert([T])))),
 	Ret0 = erl_syntax:application(
-		lergic_public_to_private(erl_syntax:application_operator(T)),
+		public_to_private(?MODULE,erl_syntax:application_operator(T)),
 		[
 			erl_syntax:string(CompStr),
 			Comp
 		]
 	),
 	Ret1 = deep_copy_pos(T,Ret0),
-	try
-	{[Ret2],_} = parse_trans:transform(fun do_munge_functions/4,
-		Lookup,
-		[Ret1],
-		[]
-	),
-	{Ret2,Used2}
-	catch _:Err -> io:format("munge failed with ~p~n",[Err]),throw(Err) end.
+	{Ret1,Used2}.
 
 do_munge_functions(application,T,_Ctx,Lookup) ->
 	{M,F} = mod_fn(T),
@@ -243,20 +260,24 @@ do_munge_functions(application,T,_Ctx,Lookup) ->
 do_munge_functions(_Type,T,_Ctx,Lookup) ->
 	{T,true,Lookup}.
 
+next_template('$prev','$prev') -> true;
+next_template(Tmpl,'$prev') -> Tmpl;
+next_template(_Tmpl,Tmpl2) -> Tmpl2.
+
 query_parts([], Acc, Tmpl, _Lookup, Set) -> {Acc,Tmpl,Set};
 query_parts([Term|Rest], Acc, Tmpl, Lookup, Set) ->
 	case erl_syntax:type(Term) of
 		application ->
 			{Rest2,Acc2,Tmpl2,Set2} = query_parts_from_call(Term,Rest,Acc,Lookup,Set),
-			query_parts(Rest2,Acc2,Tmpl2,Lookup,Set2);
+			query_parts(Rest2,Acc2,next_template(Tmpl,Tmpl2),Lookup,Set2);
 		match_expr ->
 			{Rest2,Acc2,Tmpl2,Set2} = query_parts_from_match(Term,Rest,Acc,Set),
-			query_parts(Rest2,Acc2,Tmpl2,Lookup,Set2);
+			query_parts(Rest2,Acc2,next_template(Tmpl,Tmpl2),Lookup,Set2);
 		Type when Type == infix_expr; Type == prefix_expr ->
 			%replace matches against ops with primitive predicates and anything else with a bind
 			case query_parts_from_operator(Term,Rest,Acc,Tmpl,Set) of
-				{finished,Acc,Tmpl2,Set} -> {Acc,Tmpl2,Set};
-				{Rest2,Acc2,Tmpl2,Set2} -> query_parts(Rest2,Acc2,Tmpl2,Lookup,Set2)
+				{finished,Acc,Tmpl2,Set} -> {Acc,next_template(Tmpl,Tmpl2),Set};
+				{Rest2,Acc2,Tmpl2,Set2} -> query_parts(Rest2,Acc2,next_template(Tmpl,Tmpl2),Lookup,Set2)
 			end;
 		_ when Rest == [] ->
 			%it's a value expression, we're done!
@@ -303,6 +324,17 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Set) ->
 				erl_syntax:list([Call])
 			)),
 			{Rest,[Test,Generator|Acc],Var,Set2};
+		{lergic,none} -> 
+			{Call,Set2} = transform_lergic_call(
+				dup(Term,erl_syntax:application(
+					dup(Term,erl_syntax:atom(lergic)), 
+					dup(Term,erl_syntax:atom(none_)),
+					erl_syntax:application_arguments(Term)
+				)),
+				Lookup,
+				Set
+			),
+			{Rest,[Call|Acc],'$prev',Set2};
 		{lergic,Fn} -> throw({lergic,nested_lergic_transform,Fn,Term});
 		{_Mod,_Fn} ->
 			Op = erl_syntax:application_operator(Term),

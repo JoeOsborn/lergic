@@ -56,6 +56,13 @@ fn_test() ->
 		cool_number(V),
 		lergic:fn(odd(V)),
 		lergic:fn(double(V))
+	)),
+	?assertEqual([3,4], lergic:all(
+		cool_number(V),
+		lergic:none(
+			V2 = lergic:fn(double(V)),
+			cool_number(V2)
+		)
 	)).
 
 rel_cool_number(V) ->
