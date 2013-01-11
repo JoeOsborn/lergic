@@ -1,6 +1,9 @@
 -module(lergic_kv).
 %the -lergic(lookup,Rel) attribute will turn calls
 % of the form [V = ]module:relation(K...) into module:Rel(relation,K...,V).
+%the -lergic(precedence) attribute will turn calls
+% of the form module:relation(K...) into module:Rel(relation,K...,top).
+%and calls of the form of the form (Rel(K...))(Lev) into Rel(relation,K...,Lev).
 -define(LERGIC_QUERIES,[all,maybe,one,none]).
 -export([all_/2, maybe_/2, one_/2, none_/2]).
 %parse transform
@@ -50,7 +53,7 @@ parse_transform(Forms, Options) ->
 		F <- Attributes++Others],
 	{Forms1,_S1} = parse_trans:transform(
 		fun do_transform/4,
-		{none,sets:new()},
+		{none,false,sets:new()},
 		AnnotatedForms,
 		Options
 	),
@@ -67,37 +70,43 @@ maybe_atom(T) ->
 		_ -> T
 	end.
 	
-do_transform(attribute,T,_Ctx,S={_Lookup,Used}) ->
+do_transform(attribute,T,_Ctx,S={Lookup,Prec,Used}) ->
 	case {
 		maybe_atom(erl_syntax:attribute_name(T)),
 		erl_syntax:attribute_arguments(T)
 	} of
 		{lergic,[Arg]} -> 
-			[Prop,Val] = erl_syntax:tuple_elements(Arg),
-			{lookup,Rel} = {maybe_atom(Prop),maybe_atom(Val)},
-			{T,true,{{lookup,Rel},Used}};
+			case erl_syntax:type(Arg) of
+				tuple ->
+					[Prop,Val] = erl_syntax:tuple_elements(Arg),
+					{lookup,Rel} = {maybe_atom(Prop),maybe_atom(Val)},
+					{T,true,{{lookup,Rel},Prec,Used}};
+				atom ->
+					precedence = erl_syntax:atom_value(Arg),
+					{T,true,{Lookup,true,Used}}
+			end;
 		_ -> {T,true,S}
 	end;
-do_transform(function, T, Ctx, {Lookup,Used}) ->
+do_transform(function, T, Ctx, {Lookup,Prec,Used}) ->
 	%on each pass through a function, change one query into an LC,
 	%then re-analyze variable bindings. This is to avoid bindings from
 	%one leaking out in the naive analysis and then poisoning later LCs.
 	case parse_trans:transform(
 		fun do_fun_transform/4,
-		{false,Lookup,Used},
+		{false,Lookup,Prec,Used},
 		[erl_syntax_lib:annotate_bindings(T,[])],
 		[]
 	) of
-		{[NewT],{false,_,Used2}} -> 
-			{NewT, false, {Lookup,Used2}};
-		{[NewT],{true,_,Used2}} -> 
-			do_transform(function, NewT, Ctx, {Lookup,Used2})
+		{[NewT],{false,_,_,Used2}} -> 
+			{NewT, false, {Lookup,Prec,Used2}};
+		{[NewT],{true,_,_,Used2}} -> 
+			do_transform(function, NewT, Ctx, {Lookup,Prec,Used2})
 	end;
 do_transform(_,T,_,S) ->
 	{T,true,S}.
 
-do_fun_transform(_, T, _Ctx, S={true,_Lookup,_Used}) -> {T,true,S};
-do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
+do_fun_transform(_, T, _Ctx, S={true,_Lookup,_Prec,_Used}) -> {T,true,S};
+do_fun_transform(application, T, Ctx, S={false,Lookup,Prec,Used}) ->
 	% io:format("maybe transform ~p~n",[T]),
 	{M,F} = mod_fn(T),
 	% io:format("MFN:~p~n",[{M,F}]),
@@ -108,14 +117,16 @@ do_fun_transform(application, T, Ctx, S={false,Lookup,Used}) ->
 	} of
 		{lergic,true} ->
 			% io:format("transforming call ~p~n",[T]),
-			{T2,Used2} = transform_lergic_call(T,Lookup,Used),
+			{T2,Used2} = transform_lergic_call(T,Lookup,Prec,Used),
+			% io:format("munging ~p~n",[parse_trans:revert([T2])]),
 			{[T3],_} = parse_trans:transform(fun do_munge_functions/4,
 				Lookup,
 				[T2],
 				[]
 			),
+			% io:format("got ~p~n",[parse_trans:revert([T3])]),
 			% io:format("transformed call~n"),
-			{T3,false,{true,Lookup,Used2}};
+			{T3,false,{true,Lookup,Prec,Used2}};
 		_ ->
 			{T,true,S}
 	end
@@ -156,9 +167,10 @@ deep_copy_pos(T,Dest) ->
 	),
 	Ret.
 
-transform_lergic_call(T,Lookup,Used) ->
+transform_lergic_call(T,Lookup,Prec,Used) ->
+	% io:format("Transform ~p~n",[parse_trans:revert([T])]),
 	Args0 = erl_syntax:application_arguments(T),
-	{Body,Template,Used2} = case query_parts(Args0,[],undefined,Lookup,Used) of
+	{Body,Template,Used2} = case query_parts(Args0,[],undefined,Lookup,Prec,Used) of
 		{NewArgs,Tmpl,Set} when Tmpl =/= undefined ->
 			{lists:reverse(NewArgs),Tmpl,Set};
 		Result ->
@@ -175,6 +187,7 @@ transform_lergic_call(T,Lookup,Used) ->
 		]
 	),
 	Ret1 = deep_copy_pos(T,Ret0),
+	% io:format("Got ~p~n",[parse_trans:revert([Ret1])]),
 	{Ret1,Used2}.
 
 do_munge_functions(application,T,_Ctx,Lookup) ->
@@ -194,22 +207,22 @@ do_munge_functions(application,T,_Ctx,Lookup) ->
 do_munge_functions(_Type,T,_Ctx,Lookup) ->
 	{T,true,Lookup}.
 
-query_parts([], Acc, Tmpl, _Lookup, Set) -> {Acc,Tmpl,Set};
-query_parts([Term|Rest], Acc, Tmpl, Lookup, Set) ->
+query_parts([], Acc, Tmpl, _Lookup, _Prec, Set) -> {Acc,Tmpl,Set};
+query_parts([Term|Rest], Acc, Tmpl, Lookup, Prec, Set) ->
 	case erl_syntax:type(Term) of
 		application ->
 			{Rest2,Acc2,Tmpl2,Set2} = 
-				query_parts_from_call(Term,Rest,Acc,Lookup,Set),
-			query_parts(Rest2,Acc2,lergic:next_template(Tmpl,Tmpl2),Lookup,Set2);
+				query_parts_from_call(Term,Rest,Acc,Lookup,Prec,Set),
+			query_parts(Rest2,Acc2,lergic:next_template(Tmpl,Tmpl2),Lookup,Prec,Set2);
 		match_expr ->
 			{Rest2,Acc2,Tmpl2,Set2} = 
-				query_parts_from_match(Term,Rest,Acc,Lookup,Set),
-			query_parts(Rest2,Acc2,lergic:next_template(Tmpl,Tmpl2),Lookup,Set2);
+				query_parts_from_match(Term,Rest,Acc,Lookup,Prec,Set),
+			query_parts(Rest2,Acc2,lergic:next_template(Tmpl,Tmpl2),Lookup,Prec,Set2);
 		Type when Type == infix_expr; Type == prefix_expr ->
 			%replace with primitive predicates and anything else with a bind
 			case query_parts_from_operator(Term,Rest,Acc,Tmpl,Set) of
 				{finished,Acc,Tmpl2,Set} -> {Acc,lergic:next_template(Tmpl,Tmpl2),Set};
-				{Rest2,Acc2,Tmpl2,Set2} -> query_parts(Rest2,Acc2,lergic:next_template(Tmpl,Tmpl2),Lookup,Set2)
+				{Rest2,Acc2,Tmpl2,Set2} -> query_parts(Rest2,Acc2,lergic:next_template(Tmpl,Tmpl2),Lookup,Prec,Set2)
 			end;
 		_ when Rest == [] ->
 			%it's a value expression, we're done!
@@ -219,7 +232,7 @@ query_parts([Term|Rest], Acc, Tmpl, Lookup, Set) ->
 			throw({values_not_permitted_before_end,_Type,Term})
 	end.
 
-query_parts_from_call(Term,Rest,Acc,Lookup,Set) ->
+query_parts_from_call(Term,Rest,Acc,Lookup,Prec,Set) ->
 	{M,F} = mod_fn(Term),
 	case {maybe_atom(M),maybe_atom(F)} of
 		{lergic,fn} ->
@@ -247,14 +260,13 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Set) ->
 					erl_syntax:application_arguments(Term)
 				)),
 				Lookup,
+				Prec,
 				Set
 			),
 			{Rest,[Call|Acc],'$prev',Set2};
 		{lergic,Fn} -> throw({lergic,nested_lergic_transform,Fn,Term});
 		{_Mod,_Fn} ->
-			Op = erl_syntax:application_operator(Term),
-			Args0 = erl_syntax:application_arguments(Term),
-			{Rest2,Parts,BoundPattern,Set2} = relation_query(Op,Args0,undefined,Rest,Lookup,Set),
+			{Rest2,Parts,BoundPattern,Set2} = relation_query(Term,undefined,Rest,Lookup,Prec,Set),
 			%TODO: return just the Value part, not the Key part, as Boundpattern.
 			[_K,V] = erl_syntax:tuple_elements(BoundPattern),
 			{Rest2,lists:reverse(Parts)++Acc,V,Set2}
@@ -278,7 +290,18 @@ lookup_operator(Op,{lookup,Rel}) ->
 			))
 	end.
 
-relation_query(Op, Key, Value, Rest, Lookup, Set) ->
+relation_query(Term, Value, Rest, Lookup, Prec, Set) ->
+	{RealTerm,PrecLevel} = case
+		erl_syntax:type(erl_syntax:application_operator(Term)) 
+	of
+		application -> 
+			RT = erl_syntax:application_operator(Term),
+			[PL] = erl_syntax:application_arguments(Term),
+			{RT,PL};
+		_ -> {Term,erl_syntax:atom(top)}
+	end,
+	Op = erl_syntax:application_operator(RealTerm),
+	Key = erl_syntax:application_arguments(RealTerm),
 	% io:format("turn ~p(~p,~p) into rel~n",[Op,Key,Value]),
 	{NewKeyArgs,KeyTemplate,Rest2,Set2} = freshen_variables(Key,Rest,Set),
 	{[NewValArg],[ValTemplate],Rest3,Set3} = case Value of
@@ -306,7 +329,11 @@ relation_query(Op, Key, Value, Rest, Lookup, Set) ->
 				[]
 		end++
 		[dup(Op,erl_syntax:list(NewKeyArgs)),
-		 dup(Op,NewValArg)]
+		 dup(Op,NewValArg)]++
+		 case Prec of
+			 true -> [PrecLevel];
+			 false -> []
+		 end
 	)),
 	% io:format("Bound:~p~n,Call:~p~n",[BoundPattern,Call]),
 	Generator = dup(Op,
@@ -327,7 +354,7 @@ relation_query(Op, Key, Value, Rest, Lookup, Set) ->
 	end,BoundPattern,Set3}.
 
 %turn matches into "X from Y", i.e. generators
-query_parts_from_match(Term,Rest,Acc,Lookup,Set) ->
+query_parts_from_match(Term,Rest,Acc,Lookup,Prec,Set) ->
 	%any fns inside will get replaced later
 	L = erl_syntax:match_expr_pattern(Term),
 	R = erl_syntax:match_expr_body(Term),
@@ -340,37 +367,41 @@ query_parts_from_match(Term,Rest,Acc,Lookup,Set) ->
 			throw({lergic,nested_lergic_transform,F,Term});
 		{application,Mod,_Fn} when Mod =/= lergic ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(
-				erl_syntax:application_operator(R),
-				erl_syntax:application_arguments(R),
+				R,
 				L,
 				Rest,
 				Lookup,
+				Prec,
 				Set
 			),
 			{Rest2,lists:reverse(Parts)++Acc,BoundPattern,Set2};
 		{prefix_expr,_,_} ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(
-				dup(Term,erl_syntax:module_qualifier(
-					erl_syntax:atom(lergic_kv),
-					erl_syntax:prefix_expr_operator(R)
-				)),
-				[erl_syntax:prefix_expr_argument(R)],
+				dup(Term,erl_syntax:application(
+					erl_syntax:module_qualifier(
+						erl_syntax:atom(lergic_kv),
+						erl_syntax:prefix_expr_operator(R)
+					),
+					[erl_syntax:prefix_expr_argument(R)])),
 				L,
 				Rest,
 				none,
+				false,
 				Set
 			),
 			{Rest2,lists:reverse(Parts)++Acc,BoundPattern,Set2};
 		{infix_expr,_,_} ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(
-				dup(Term,erl_syntax:module_qualifier(
-					erl_syntax:atom(lergic_kv),
-					erl_syntax:infix_expr_operator(R)
-				)),
-				[erl_syntax:infix_expr_left(R),erl_syntax:infix_expr_right(R)],
+				dup(Term,erl_syntax:application(
+					erl_syntax:module_qualifier(
+						erl_syntax:atom(lergic_kv),
+						erl_syntax:infix_expr_operator(R)
+					),
+					[erl_syntax:infix_expr_left(R),erl_syntax:infix_expr_right(R)])),
 				L,
 				Rest,
 				none,
+				false,
 				Set
 			),
 			{Rest2,lists:reverse(Parts)++Acc,BoundPattern,Set2};
