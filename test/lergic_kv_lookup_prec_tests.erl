@@ -62,6 +62,12 @@ fn_test() ->
 	?assertEqual([5,6,7], lergic:all(
 		(cool_number(V))(extra_cool),
 		V
+	)),
+	?assertEqual([{a,[2,3,4]}], lergic:all(
+		{a,lergic:all(
+			cool_number(V2),
+			V2
+		)}
 	)).
 
 rel(boring_number,[V],Val,top) ->

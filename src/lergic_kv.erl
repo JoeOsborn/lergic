@@ -251,12 +251,12 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Prec,Set) ->
 				erl_syntax:list([Call])
 			)),
 			{Rest,[Test,Generator|Acc],Var,Set2};
-		{lergic,none} -> 
+		{lergic,T} -> 
 			% [] == transform_lergic_call(lergic:all(...),Lookup,Set)
 			{Call,Set2} = transform_lergic_call(
 				dup(Term,erl_syntax:application(
 					dup(Term,erl_syntax:atom(lergic)), 
-					dup(Term,erl_syntax:atom(none_)),
+					dup(Term,erl_syntax:atom(list_to_atom(atom_to_list(T) ++ "_"))),
 					erl_syntax:application_arguments(Term)
 				)),
 				Lookup,
@@ -264,7 +264,6 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Prec,Set) ->
 				Set
 			),
 			{Rest,[Call|Acc],'$prev',Set2};
-		{lergic,Fn} -> throw({lergic,nested_lergic_transform,Fn,Term});
 		{_Mod,_Fn} ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(Term,undefined,Rest,Lookup,Prec,Set),
 			%TODO: return just the Value part, not the Key part, as Boundpattern.
@@ -363,8 +362,6 @@ query_parts_from_match(Term,Rest,Acc,Lookup,Prec,Set) ->
 	%and anything else with a bind
 	{M,F} = mod_fn(R),
 	case {erl_syntax:type(R),maybe_atom(M),maybe_atom(F)} of
-		{application,lergic,Fn} when Fn =/= fn ->
-			throw({lergic,nested_lergic_transform,F,Term});
 		{application,Mod,_Fn} when Mod =/= lergic ->
 			{Rest2,Parts,BoundPattern,Set2} = relation_query(
 				R,

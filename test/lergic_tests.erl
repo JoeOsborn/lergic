@@ -63,6 +63,11 @@ fn_test() ->
 			V2 = lergic:fn(double(V)),
 			cool_number(V2)
 		)
+	)),
+	?assertEqual([{a,[2,3,4]}], lergic:all(
+		{a,lergic:all(
+			cool_number(V2)
+		)}
 	)).
 
 rel_cool_number(V) ->

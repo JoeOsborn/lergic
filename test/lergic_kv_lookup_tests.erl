@@ -57,6 +57,12 @@ fn_test() ->
 		boring_number(V),
 		V = lergic:fn(double(V)),
 		V
+	)),
+	?assertEqual([{a,[2,3,4]}], lergic:all(
+		{a,lergic:all(
+			cool_number(V2),
+			V2
+		)}
 	)).
 
 rel(boring_number,[V],Val) ->

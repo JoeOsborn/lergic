@@ -37,8 +37,11 @@ matching_test() ->
 		(cool_number(V))(extra_cool),
 		V
 	)),
-	ok
-	.
+	?assertEqual([{a,[2,3,4]}], lergic:all(
+		{a,lergic:all(
+			cool_number(V2)
+		)}
+	)).
 
 fn_test() ->
 	A = 2,

@@ -340,11 +340,11 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Prec,Set) ->
 				erl_syntax:list([Call])
 			)),
 			{Rest,[Test,Generator|Acc],Var,Set2};
-		{lergic,none} -> 
+		{lergic,T} -> 
 			{Call,Set2} = transform_lergic_call(
 				dup(Term,erl_syntax:application(
 					dup(Term,erl_syntax:atom(lergic)), 
-					dup(Term,erl_syntax:atom(none_)),
+					dup(Term,erl_syntax:atom(list_to_atom(atom_to_list(T) ++ "_"))),
 					erl_syntax:application_arguments(Term)
 				)),
 				Lookup,
@@ -352,7 +352,6 @@ query_parts_from_call(Term,Rest,Acc,Lookup,Prec,Set) ->
 				Set
 			),
 			{Rest,[Call|Acc],'$prev',Set2};
-		{lergic,Fn} -> throw({lergic,nested_lergic_transform,Fn,Term});
 		{_Mod,_Fn} ->
 			{RealTerm,PrecLevel} = case
 				erl_syntax:type(erl_syntax:application_operator(Term)) 

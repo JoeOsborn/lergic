@@ -52,6 +52,11 @@ fn_test() ->
 		cool_number(V),
 		lergic:fn(odd(V)),
 		lergic:fn(double(V))
+	)),
+	?assertEqual([{a,[2,3,4]}], lergic:all(
+		{a,lergic:all(
+			cool_number(V2)
+		)}
 	)).
 
 odd(V) -> (V rem 2) == 1.
